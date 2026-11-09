@@ -18,10 +18,10 @@ Linux 主機（共用 kernel）
 
 | 檔案 | 用途 |
 |---|---|
-| `lab-base/Dockerfile` | 基底映像：官方 systemd + Docker 映像，鎖掉預設帳密、只收金鑰登入 |
-| `lab-base-amd64.tar.gz` | 已建好的 `lab-base:latest`（linux/amd64），離線主機 `docker load` 用 |
-| `sysbox-ce_0.7.1.linux_amd64.deb` | Sysbox CE v0.7.1 安裝檔 |
-| `offline-deps/<發行版>/*.deb` | Sysbox 安裝依賴（`jq`、`fuse`、`rsync`、`iptables` 等） |
+| `lab-base/Dockerfile` | 基底映像：官方 systemd + Docker 映像，鎖掉預設帳密、映像層只收金鑰（腳本可在執行時改密碼） |
+| `lab-base-amd64.tar.gz` | 已建好的 `lab-base:latest`（linux/amd64），離線主機 `docker load` 用；發布包內容，不進 git |
+| `sysbox-ce_0.7.1.linux_amd64.deb` | Sysbox CE v0.7.1 安裝檔；發布包內容，不進 git |
+| `offline-deps/<發行版>/*.deb` | Sysbox 安裝依賴（`jq`、`fuse`、`rsync`、`iptables` 等）；發布包內容，不進 git |
 | `LICENSE` | Apache License 2.0（只涵蓋本專案的程式碼與文件） |
 | `NOTICE` | 元件授權與 Ubuntu 商標注意事項 |
 | `lab-init.sh` | 建一位使用者的容器（預設密碼登入；`--key`／`--keygen` 走金鑰） |
@@ -32,11 +32,23 @@ Linux 主機（共用 kernel）
 | `lib/lab-common.sh` | 共用設定與函式 |
 | `lab.conf.example` | 複製成 `lab.conf` 後調整 |
 
+## 快速開始（主機可連外網）
+
+前提：Linux amd64、systemd、原生 Docker，而且已裝好 Sysbox（第 1、2 節）。
+
+```bash
+git clone <your-repo> lab-sysbox && cd lab-sysbox
+docker build --platform linux/amd64 -t lab-base:latest lab-base
+sudo ./lab-init.sh alice        # 印出初始密碼與 SSH 指令
+```
+
+離線主機請看第 3 節。
+
 ## 為什麼不在這台 Mac/Windows 上部署
 
 Sysbox 是 OCI runtime，安裝時要改主機的 `/etc/docker/daemon.json`、跑 `sysbox-fs`／`sysbox-mgr` 特權服務，
 並且需要真正的 Linux 主機與 systemd。Docker Desktop、OrbStack 這類 macOS 上的 Linux VM 不讓使用者註冊自訂 runtime，
-所以在 Mac 上只能做「拉映像、建映像、驗證內容」，實際的 `docker run --runtime=sysbox-runc` 要在目標 Linux 主機執行。
+所以在 Mac/Windows 上只能做「拉映像、建映像、驗證內容」，實際的 `docker run --runtime=sysbox-runc` 要在目標 Linux 主機執行。
 
 ## 1. 主機前提
 
@@ -58,9 +70,7 @@ sudo systemctl enable --now docker
 
 ## 2. 安裝 Sysbox
 
-`lab-sysbox/` 同目錄已有一份 `sysbox-ce_0.7.1.linux_amd64.deb`，sha256 與官方公布相符
-（`9d6d5484f980d0a17f86c492c1262015c2afb66280bdb97215b79fde6a0261c5`），可直接帶到目標主機。
-沒有這份檔案時再下載：
+離線發布包會附一份已驗證的 `sysbox-ce_0.7.1.linux_amd64.deb`；直接 clone 的人請自行下載並比對 sha256：
 
 ```bash
 wget https://downloads.nestybox.com/sysbox/releases/v0.7.1/sysbox-ce_0.7.1-0.linux_amd64.deb
@@ -69,6 +79,7 @@ sha256sum sysbox-ce_0.7.1-0.linux_amd64.deb
 # GitHub release 上的檔名是 sysbox-ce_0.7.1.linux_amd64.deb（沒有 -0），內容相同
 
 # 安裝程式可能會重啟 Docker，先清掉既有容器
+# 只在專用主機上這樣做；上面有正式服務的機器不要清空
 docker rm -f $(docker ps -aq) 2>/dev/null || true
 
 sudo apt-get install -y jq
@@ -81,9 +92,9 @@ docker info --format '{{json .Runtimes}}' | jq
 `Runtimes` 裡要看到 `sysbox-runc`。沒有的話看
 <https://github.com/nestybox/sysbox/blob/master/docs/user-guide/troubleshoot.md>。
 
-## 3. 搬到離線主機（映像與依賴包）
+## 3. 搬到離線主機（可選，映像與依賴包）
 
-目標主機不能連外網，所以映像與依賴都在有網路的機器上先備好。這裡已經完成：
+若目標主機不能連外網，映像與依賴都在有網路的機器上先備好：
 
 | 檔案 | 內容 | 大小 |
 |---|---|---|
@@ -154,7 +165,7 @@ docker run --rm -v "$PWD/offline-deps/debian12:/out" debian:12 bash -c \
 
 ## 4. 建置 lab-base（只有可連外網的機器才做）
 
-現成的 `lab-base-amd64.tar.gz` 就是這條指令的產物；離線主機不需要、也不能重跑，因為 `apt-get` 會連外網。
+離線發布包裡的 `lab-base-amd64.tar.gz` 就是這條指令的產物；離線主機不需要、也不能重跑，因為 `apt-get` 會連外網。
 
 ```bash
 docker build --platform linux/amd64 -t lab-base:latest lab-base
@@ -163,10 +174,15 @@ docker build --platform linux/amd64 -t lab-base:latest lab-base
 要改基底或加裝套件時，在有網路的機器上重跑，再重新打包：
 
 ```bash
-docker build --platform linux/amd64 -t lab-base:latest lab-base
-docker save lab-base:latest | gzip -1 > lab-base-amd64.tar.gz
+docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
+  -t lab-base:latest --output type=docker,dest=/tmp/lab-base.tar lab-base
+gzip -1 -c /tmp/lab-base.tar > lab-base-amd64.tar.gz
 shasum -a 256 lab-base-amd64.tar.gz
 ```
+
+不要用單純的 `docker save`：buildx／containerd image store 產出的存檔會夾帶
+attestation manifest，較舊的 Docker 可能挑不到平台而載入失敗。上面的 `type=docker`
+加 `--provenance=false` 會產生單一 manifest 的乾淨 archive，新舊 Docker 都能 `docker load`。
 
 這層多做四件事：
 
@@ -285,9 +301,11 @@ sudo ./lab-team.sh destroy --name dev
   定義留在 `lab-base/Dockerfile.bionic` 供對照。
 - 內層 Docker 是 base 映像帶的 **20.10.17（2022 年）**，不是現在的版本。離線環境不能用 `docker pull`，
   練習 `build`／`run`／`load` 沒問題；要換成新版 Docker CE，得在有網路的機器重建 `lab-base`。
-- 映像原本的 `admin:admin` 已鎖；root 不可 SSH；只允許 `lab` 且只接受金鑰。
-  金鑰由 `lab-init.sh` 產生，私鑰只存在主機 `/var/lib/lab/keys/`（權限 700 目錄），
-  不要用聊天軟體或明碼管道傳給使用者。
+- 映像原本的 `admin:admin` 已鎖、root 不可 SSH，映像層的 sshd 是金鑰限定。
+  但 `lab-init.sh`／`lab-team.sh` 預設會在容器內把 drop-in 改成 `PasswordAuthentication yes`
+  並發一組隨機初始密碼，所以**實際防線是那組密碼加上你綁定的位址**（`LAB_BIND` 預設 `0.0.0.0`）。
+  金鑰模式（`--keygen`／`--key`）私鑰只存在主機 `/var/lib/lab/keys/`（目錄 700），
+  不要用聊天軟體或明碼管道傳；密碼模式的初始密碼只印一次、不落檔，弄丟就 `lab-reset.sh` 重發。
 - 不掛主機的 `/var/run/docker.sock`、不加 `--privileged`；內層 Docker 是容器內獨立的 daemon。
 - Sysbox 用 user namespace 把容器 root 對映到主機非特權 UID，但**仍共用主機 kernel**。
   需要 kernel module、核心版本測試或強隔離邊界時，請改用 VM。
