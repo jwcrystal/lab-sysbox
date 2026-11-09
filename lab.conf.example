@@ -1,0 +1,30 @@
+# 複製為 lab.conf 後修改；環境變數優先於本檔，本檔優先於腳本預設值。
+
+# 使用的映像（lab-base/Dockerfile 建置出來的）
+LAB_IMAGE=lab-base:latest
+
+# Sysbox 註冊的 runtime 名稱
+LAB_RUNTIME=sysbox-runc
+
+# SSH 對外綁定的位址；只給內網用時可改成 127.0.0.1 或內網 IP
+LAB_BIND=0.0.0.0
+
+# 主機連接埠從這個號碼往上找
+LAB_PORT_BASE=2200
+
+# 每位使用者的資源上限
+LAB_CPUS=4
+LAB_MEMORY=8g
+LAB_PIDS_LIMIT=4096
+
+# 容器內固定的登入帳號
+LAB_ACCOUNT=lab
+
+# 狀態、金鑰放哪（需要寫入權限）
+LAB_STATE_DIR=/var/lib/lab
+
+# 印給使用者的主機名稱；留空則顯示提示字串
+LAB_SSH_TARGET=
+
+# 指定容器平台；目標主機是 amd64 時留空即可
+LAB_PLATFORM=

@@ -1,0 +1,9 @@
+.DS_Store
+lab.conf
+
+# 離線發布產物：改用 GitHub Releases 或 lab-sysbox-bundle.tar 散布
+*.tar
+*.tar.gz
+sysbox-ce_*.deb
+offline-deps/
+lab-sysbox-bundle.tar
