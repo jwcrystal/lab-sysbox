@@ -1,5 +1,10 @@
 **English** | [繁體中文](README.zh-TW.md)
 
+[![License](https://img.shields.io/github/license/jwcrystal/lab-sysbox)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/jwcrystal/lab-sysbox?sort=semver)](https://github.com/jwcrystal/lab-sysbox/releases)
+[![Runtime](https://img.shields.io/badge/runtime-sysbox--runc-blueviolet)](https://github.com/nestybox/sysbox)
+![Platform](https://img.shields.io/badge/platform-linux%20amd64-informational)
+
 # lab-sysbox: a per-user systemd Linux lab
 
 Run practice environments on a Linux host with Docker + Sysbox "system containers":

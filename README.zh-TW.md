@@ -1,5 +1,10 @@
 [English](README.md) | **繁體中文**
 
+[![License](https://img.shields.io/github/license/jwcrystal/lab-sysbox)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/jwcrystal/lab-sysbox?sort=semver)](https://github.com/jwcrystal/lab-sysbox/releases)
+[![Runtime](https://img.shields.io/badge/runtime-sysbox--runc-blueviolet)](https://github.com/nestybox/sysbox)
+![Platform](https://img.shields.io/badge/platform-linux%20amd64-informational)
+
 # lab-sysbox：每人一套的 systemd Linux 練習環境
 
 用 Docker + Sysbox 的「系統容器」在 Linux 主機上建立練習環境：
