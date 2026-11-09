@@ -1,85 +1,98 @@
-# lab-sysbox：每人一套的 systemd Linux 練習環境
+**English** | [繁體中文](README.zh-TW.md)
 
-用 Docker + Sysbox 的「系統容器」在 Linux 主機上開練習環境：
+# lab-sysbox: a per-user systemd Linux lab
+
+Run practice environments on a Linux host with Docker + Sysbox "system containers":
 
 ```text
-Linux 主機（共用 kernel）
+Linux host (shared kernel)
 └─ Docker + sysbox-runc
-   ├─ lab-alice   系統容器：systemd(PID 1) + sshd + 自己的 dockerd
-   ├─ lab-bob     同上
-   └─ lab-carol   同上
+   ├─ lab-alice   system container: systemd (PID 1) + sshd + its own dockerd
+   ├─ lab-bob     same
+   └─ lab-carol   same
 ```
 
-每位使用者只是 `ssh -i <key> -p <port> lab@<host>` 進來，拿到一台看起來像 Linux 主機的環境：
-`systemctl`、`journalctl`、`apt install`、`docker run` 都能用，而且彼此看不到對方的程序與檔案。
-這不是 VM，也不是硬體模擬：共用主機 kernel，隔離邊界比 VM 弱（詳見文末）。
+Each user connects with `ssh -p <port> lab@<host>` (password mode, the default) or
+`ssh -i <key> ...` (key mode) and gets something that behaves like a Linux box:
+`systemctl`, `journalctl`, `apt install` and `docker run` all work, and users cannot
+see each other's processes or files. This is not a VM and not hardware emulation: the
+host kernel is shared, so the isolation boundary is weaker than a VM (see the end).
 
-## 檔案
+## Files
 
-| 檔案 | 用途 |
+| File | Purpose |
 |---|---|
-| `lab-base/Dockerfile` | 基底映像：官方 systemd + Docker 映像，鎖掉預設帳密、映像層只收金鑰（腳本可在執行時改密碼） |
-| `lab-base-amd64.tar.gz` | 已建好的 `lab-base:latest`（linux/amd64），離線主機 `docker load` 用；發布包內容，不進 git |
-| `sysbox-ce_0.7.1.linux_amd64.deb` | Sysbox CE v0.7.1 安裝檔；發布包內容，不進 git |
-| `offline-deps/<發行版>/*.deb` | Sysbox 安裝依賴（`jq`、`fuse`、`rsync`、`iptables` 等）；發布包內容，不進 git |
-| `LICENSE` | Apache License 2.0（只涵蓋本專案的程式碼與文件） |
-| `NOTICE` | 元件授權與 Ubuntu 商標注意事項 |
-| `lab-init.sh` | 建一位使用者的容器（預設密碼登入；`--key`／`--keygen` 走金鑰） |
-| `lab-reset.sh` | 砍掉該容器再重建（清空該使用者所有資料） |
-| `lab-ls.sh` | 列出所有使用者、埠、狀態 |
-| `lab-team.sh` | 團隊共用一個容器：`init`／`add`／`remove`／`ls`／`reset`／`destroy` |
-| `lab-remove.sh` | 永久移除使用者（可一併刪金鑰） |
-| `lib/lab-common.sh` | 共用設定與函式 |
-| `lab.conf.example` | 複製成 `lab.conf` 後調整 |
+| `lab-base/Dockerfile` | Base image: upstream systemd + Docker image, default credentials locked, key-only sshd at the image layer (scripts can switch it to passwords at runtime) |
+| `lab-base-amd64.tar.gz` | Prebuilt `lab-base:latest` (linux/amd64) for `docker load` on offline hosts; bundle artifact, not in git |
+| `sysbox-ce_0.7.1.linux_amd64.deb` | Sysbox CE v0.7.1 package; bundle artifact, not in git |
+| `offline-deps/<distro>/*.deb` | Sysbox install dependencies (`jq`, `fuse`, `rsync`, `iptables`, ...); bundle artifact, not in git |
+| `LICENSE` | Apache License 2.0 (covers this project's code and docs only) |
+| `NOTICE` | Component licenses and Ubuntu trademark notes |
+| `lab-init.sh` | Create one user's container (password login by default; `--key` / `--keygen` for keys) |
+| `lab-reset.sh` | Delete that container and recreate it (wipes all of that user's data) |
+| `lab-ls.sh` | List users, ports and status |
+| `lab-team.sh` | One container shared by a team: `init` / `add` / `remove` / `ls` / `reset` / `destroy` |
+| `lab-remove.sh` | Permanently remove a user (optionally deleting the key too) |
+| `lib/lab-common.sh` | Shared settings and helpers |
+| `lab.conf.example` | Copy to `lab.conf` and adjust |
+| `README.zh-TW.md` | Traditional Chinese version of this document |
 
-## 快速開始（主機可連外網）
+## Quick start (host has internet access)
 
-前提：Linux amd64、systemd、原生 Docker，而且已裝好 Sysbox（第 1、2 節）。
+Prerequisites: Linux amd64, systemd, native Docker, and Sysbox already installed
+(sections 1 and 2).
 
 ```bash
-git clone <your-repo> lab-sysbox && cd lab-sysbox
+git clone https://github.com/jwcrystal/lab-sysbox.git
+cd lab-sysbox
 docker build --platform linux/amd64 -t lab-base:latest lab-base
-sudo ./lab-init.sh alice        # 印出初始密碼與 SSH 指令
+sudo ./lab-init.sh alice        # prints the initial password and the SSH command
 ```
 
-離線主機請看第 3 節。
+For offline hosts see section 3.
 
-## 為什麼不在這台 Mac/Windows 上部署
+## Why not deploy on a Mac or Windows machine
 
-Sysbox 是 OCI runtime，安裝時要改主機的 `/etc/docker/daemon.json`、跑 `sysbox-fs`／`sysbox-mgr` 特權服務，
-並且需要真正的 Linux 主機與 systemd。Docker Desktop、OrbStack 這類 macOS 上的 Linux VM 不讓使用者註冊自訂 runtime，
-所以在 Mac/Windows 上只能做「拉映像、建映像、驗證內容」，實際的 `docker run --runtime=sysbox-runc` 要在目標 Linux 主機執行。
+Sysbox is an OCI runtime. Installing it edits the host's `/etc/docker/daemon.json` and
+runs the privileged `sysbox-fs` / `sysbox-mgr` services, so it needs a real Linux host
+running systemd. Linux VMs on macOS or Windows (Docker Desktop, OrbStack, ...) do not let
+you register custom runtimes, so there you can only pull images, build them and verify
+their contents. The actual `docker run --runtime=sysbox-runc` has to run on the target
+Linux host.
 
-## 1. 主機前提
+## 1. Host requirements
 
-- Linux **amd64**。`lab-base` 固定使用 amd64 的 manifest digest；目標是 arm64 主機時要換 digest 重測。
-- systemd 是主機的 PID 1。
-- Docker **CE 原生安裝**。Sysbox 不支援 snap 版 Docker。
-- Sysbox 0.7.1 的安裝程式會檢查發行版與 kernel，不符就 `exit 1`：
-  Ubuntu 18.04→5.3+、20.04→5.4+、22.04→5.15+、24.04→6.8+、Debian 10/11→5.5+；
-  其他發行版 kernel ≥ 5.5 仍會放行。kernel ≥ 6.3 不需要 shiftfs。
-  建議 Ubuntu 22.04（5.15）或 24.04（6.8）。官方相容清單：
-  <https://github.com/nestybox/sysbox/blob/master/docs/distro-compat.md>。
-- 主機資源：4 CPU／4GB 起跳，再加上每位使用者的額度（預設每人 2 CPU／4GB，見 `lab.conf`）。
+- Linux **amd64**. `lab-base` pins an amd64 manifest digest; for an arm64 host, change the
+  digest and re-verify.
+- systemd is the host's PID 1.
+- Docker **CE installed natively**. Sysbox does not support the snap build.
+- The Sysbox 0.7.1 installer checks the distro and kernel and exits with status 1 when
+  unsupported: Ubuntu 18.04→5.3+, 20.04→5.4+, 22.04→5.15+, 24.04→6.8+, Debian 10/11→5.5+.
+  Other distros are allowed with kernel ≥ 5.5. Kernels ≥ 6.3 do not need shiftfs.
+  Ubuntu 22.04 (5.15) or 24.04 (6.8) are recommended. Upstream compatibility list:
+  <https://github.com/nestybox/sysbox/blob/master/docs/distro-compat.md>.
+- Host resources: 4 CPU / 4 GB as a baseline, plus each user's allocation
+  (default 2 CPU / 4 GB per user, see `lab.conf`).
 
 ```bash
-# Docker（不要用 snap）
+# Docker (do not use the snap package)
 curl -fsSL https://get.docker.com | sudo sh
 sudo systemctl enable --now docker
 ```
 
-## 2. 安裝 Sysbox
+## 2. Install Sysbox
 
-離線發布包會附一份已驗證的 `sysbox-ce_0.7.1.linux_amd64.deb`；直接 clone 的人請自行下載並比對 sha256：
+The offline bundle ships a verified `sysbox-ce_0.7.1.linux_amd64.deb`. If you cloned the
+repo, download it yourself and compare the sha256:
 
 ```bash
 wget https://downloads.nestybox.com/sysbox/releases/v0.7.1/sysbox-ce_0.7.1-0.linux_amd64.deb
 sha256sum sysbox-ce_0.7.1-0.linux_amd64.deb
-# 官方公布：9d6d5484f980d0a17f86c492c1262015c2afb66280bdb97215b79fde6a0261c5
-# GitHub release 上的檔名是 sysbox-ce_0.7.1.linux_amd64.deb（沒有 -0），內容相同
+# upstream: 9d6d5484f980d0a17f86c492c1262015c2afb66280bdb97215b79fde6a0261c5
+# the GitHub release asset is sysbox-ce_0.7.1.linux_amd64.deb (no -0); same content
 
-# 安裝程式可能會重啟 Docker，先清掉既有容器
-# 只在專用主機上這樣做；上面有正式服務的機器不要清空
+# the installer may restart Docker, so clear existing containers first
+# only on a dedicated host -- never on a machine running production services
 docker rm -f $(docker ps -aq) 2>/dev/null || true
 
 sudo apt-get install -y jq
@@ -89,43 +102,45 @@ systemctl status sysbox-fs sysbox-mgr --no-pager
 docker info --format '{{json .Runtimes}}' | jq
 ```
 
-`Runtimes` 裡要看到 `sysbox-runc`。沒有的話看
-<https://github.com/nestybox/sysbox/blob/master/docs/user-guide/troubleshoot.md>。
+`Runtimes` must contain `sysbox-runc`. If it does not, see
+<https://github.com/nestybox/sysbox/blob/master/docs/user-guide/troubleshoot.md>.
 
-## 3. 搬到離線主機（可選，映像與依賴包）
+## 3. Moving to an offline host (optional: image and dependency packages)
 
-若目標主機不能連外網，映像與依賴都在有網路的機器上先備好：
+If the target host has no internet access, prepare the image and dependencies on a
+machine that does:
 
-| 檔案 | 內容 | 大小 |
+| File | Content | Size |
 |---|---|---|
-| `lab-base-amd64.tar.gz` | `lab-base:latest` 映像（Ubuntu 22.04 基底），linux/amd64 | 277 MiB |
-| `sysbox-ce_0.7.1.linux_amd64.deb` | Sysbox 本體 | 13.8 MB |
-| `offline-deps/22.04/*.deb` | Sysbox 安裝依賴（Ubuntu 22.04 amd64） | 7.9 MB |
-| `offline-deps/24.04/*.deb` | Sysbox 安裝依賴（Ubuntu 24.04 amd64） | 1.6 MB |
+| `lab-base-amd64.tar.gz` | `lab-base:latest` image (Ubuntu 22.04 base), linux/amd64 | 277 MiB |
+| `sysbox-ce_0.7.1.linux_amd64.deb` | Sysbox itself | 13.8 MB |
+| `offline-deps/22.04/*.deb` | Sysbox install dependencies (Ubuntu 22.04 amd64) | 7.9 MB |
+| `offline-deps/24.04/*.deb` | Sysbox install dependencies (Ubuntu 24.04 amd64) | 1.6 MB |
 
-`lab-base-amd64.tar.gz` 的 sha256：
+sha256 of `lab-base-amd64.tar.gz`:
 
 ```text
 2e04c0a73b608cf899ffe8b74388cf72a325c16fc2de1fcc05714c50a93ce1b5
 ```
 
-搬過去（含腳本、deb、依賴包）：離線發布包已打包成單一檔 `lab-sysbox-bundle.tar`（約 300 MB）。
+Moving everything (scripts, deb, dependencies) as one file: the offline bundle is
+`lab-sysbox-bundle.tar` (about 300 MB).
 
-> 對外開源時不要把這個包上傳成 release asset：裡面是**修改過的 Ubuntu 映像**，
-> 授權與商標問題見「授權」一節。內部使用不受影響。
+> Do not upload that bundle as a public release asset: it contains a **modified Ubuntu
+> image**, see the Licensing section. Internal use is unaffected.
 
 ```bash
 scp lab-sysbox-bundle.tar lab-host:/srv/
 ssh lab-host 'cd /srv && tar -xf lab-sysbox-bundle.tar'
 ```
 
-或直接同步目錄：
+Or sync the directory directly:
 
 ```bash
 rsync -av lab-sysbox/ lab-host:/srv/lab-sysbox/
 ```
 
-目標主機載入映像並確認架構：
+Load the image on the target host and check the architecture:
 
 ```bash
 cd /srv/lab-sysbox
@@ -133,14 +148,15 @@ gunzip -c lab-base-amd64.tar.gz | docker load
 docker image inspect lab-base:latest --format '{{.Os}}/{{.Architecture}}'   # linux/amd64
 ```
 
-離線安裝 Sysbox 依賴與本體（挑符合目標發行版的那一包）：
+Install the Sysbox dependencies and Sysbox itself (pick the package for the target distro):
 
 ```bash
-sudo apt-get install ./offline-deps/22.04/*.deb      # 換成目標主機的版本
+sudo apt-get install ./offline-deps/22.04/*.deb      # use the target host's release
 sudo apt-get install ./sysbox-ce_0.7.1.linux_amd64.deb
 ```
 
-目標若是 Debian 12/13 或其他版本，依賴包要重抓；在同一個有網路的環境執行（換掉 image tag）：
+For Debian 12/13 or another release, regenerate the dependency bundle on a machine with
+internet access (swap the image tag):
 
 ```bash
 docker run --rm -v "$PWD/offline-deps/debian12:/out" debian:12 bash -c \
@@ -148,30 +164,37 @@ docker run --rm -v "$PWD/offline-deps/debian12:/out" debian:12 bash -c \
      jq fuse rsync iptables lsb-release debconf >/dev/null && cp /var/cache/apt/archives/*.deb /out/'
 ```
 
-### 離線主機的連帶限制
+### What an offline host also gives up
 
-1. `lab-init.sh` 不會偷偷連網：`require_image` 只在映像不存在時才 `docker build`，映像先 `docker load` 好就不會觸發。
-2. 容器內 `apt install` 會失敗（`archive.ubuntu.com` 不可達）。要給使用者的套件，現在就加進 `lab-base/Dockerfile` 重建後重新打包。
-3. 容器內 `docker pull` 會失敗。要讓使用者練習拉映像，先在 `lab-base` 放 `/opt/lab/images/*.tar`，讓他 `docker load`。
-4. Sysbox 的 `postinst` 需要 `jq`（Pre-Depends）與 `fuse`、`rsync`、`iptables`、`lsb-release`、`debconf`，所以才有上面那包依賴。
-5. 底層映像 digest 對照（`docker manifest inspect` 查得），換平台時用得到：
+1. `lab-init.sh` never reaches for the network on its own: `require_image` only runs
+   `docker build` when the image is missing, so a loaded image is never rebuilt.
+2. `apt install` inside a lab container fails (`archive.ubuntu.com` is unreachable). Add
+   whatever users need to `lab-base/Dockerfile`, rebuild, and repackage now.
+3. `docker pull` inside a lab container fails. To let users practise pulling images, put
+   tarballs in `/opt/lab/images/*.tar` inside `lab-base` and have them `docker load` those.
+4. Sysbox's `postinst` needs `jq` (Pre-Depends) plus `fuse`, `rsync`, `iptables`,
+   `lsb-release` and `debconf`, which is why the dependency bundle above exists.
+5. Base image digests (from `docker manifest inspect`), useful when switching platforms:
 
-| 平台 | manifest digest（jammy 基底） |
+| Platform | Manifest digest (jammy base) |
 |---|---|
 | linux/amd64 | `sha256:90c1410c6b678da005bdef5f2ecb45cb4aa3943da8e0cc824eed8e63ef71ec27` |
 | linux/arm64 | `sha256:a8acd8cdcd5619b77b8fb0ddfc7b3b22bed777bb30548fb71ae6e41ef52ab708` |
 
-18.04（bionic）的 digest 是 `sha256:8e22c97c…37b7`，定義保留在 `lab-base/Dockerfile.bionic`。
+The 18.04 (bionic) digest is `sha256:8e22c97c…37b7`; its definition is kept in
+`lab-base/Dockerfile.bionic`.
 
-## 4. 建置 lab-base（只有可連外網的機器才做）
+## 4. Building lab-base (only on a machine with internet access)
 
-離線發布包裡的 `lab-base-amd64.tar.gz` 就是這條指令的產物；離線主機不需要、也不能重跑，因為 `apt-get` 會連外網。
+`lab-base-amd64.tar.gz` in the offline bundle is the output of this command. The offline
+host must not (and cannot) re-run it, because `apt-get` needs the network.
 
 ```bash
 docker build --platform linux/amd64 -t lab-base:latest lab-base
 ```
 
-要改基底或加裝套件時，在有網路的機器上重跑，再重新打包：
+When you change the base or add packages, re-run it on a machine with internet access and
+repackage:
 
 ```bash
 docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
@@ -180,67 +203,82 @@ gzip -1 -c /tmp/lab-base.tar > lab-base-amd64.tar.gz
 shasum -a 256 lab-base-amd64.tar.gz
 ```
 
-不要用單純的 `docker save`：buildx／containerd image store 產出的存檔會夾帶
-attestation manifest，較舊的 Docker 可能挑不到平台而載入失敗。上面的 `type=docker`
-加 `--provenance=false` 會產生單一 manifest 的乾淨 archive，新舊 Docker 都能 `docker load`。
+Do not use plain `docker save`: with buildx or the containerd image store the resulting
+archive carries attestation manifests, and older Docker versions may fail to pick a
+platform and refuse to load it. The `type=docker` output with `--provenance=false` above
+is a single-manifest archive that both old and new Docker can `docker load`.
 
-這層多做四件事：
+This layer does four things:
 
-1. 鎖掉映像自帶的 `admin:admin`（`/etc/shadow` 改成 `!`），不留下預設帳密。
-2. 建立 `lab` 帳號：映像內建時無密碼，`sudo` NOPASSWD、加入 `docker` 群組；登入方式由腳本在執行時決定（密碼或金鑰）。
-3. sshd 只收金鑰：`PasswordAuthentication no`、`PermitRootLogin no`、`AllowUsers lab`。
-   jammy 的 OpenSSH 8.9 支援 `sshd_config.d`，所以 drop-in 與主設定檔兩處都寫（sshd 取第一個出現的值）。
-   要改用密碼登入時，`lab-init.sh`／`lab-team.sh` 的 `--password` 會把 drop-in 覆寫成
-   `PasswordAuthentication yes`（PubkeyAuthentication 仍預設開，使用者日後可自行加金鑰）。
-4. 刪掉映像內建的主機金鑰，改用 systemd drop-in 在開機時 `ssh-keygen -A` 重新產生，
-   避免每個容器共用同一組 host key。
+1. Locks the image's built-in `admin:admin` account (rewrites `/etc/shadow` to `!`), so no
+   default credentials are left behind.
+2. Creates the `lab` account: passwordless in the image, `sudo` NOPASSWD, member of the
+   `docker` group. The login method is decided by the scripts at runtime (password or key).
+3. Makes sshd key-only: `PasswordAuthentication no`, `PermitRootLogin no`,
+   `AllowUsers lab`. OpenSSH 8.9 on jammy supports `sshd_config.d`, so the setting is
+   written both as a drop-in and in the main config (sshd uses the first value it sees).
+   For password logins, `--password` in `lab-init.sh` / `lab-team.sh` rewrites the drop-in
+   to `PasswordAuthentication yes` (PubkeyAuthentication stays enabled, so users can add
+   their own key later).
+4. Removes the image's built-in host keys and regenerates them at boot with a systemd
+   drop-in running `ssh-keygen -A`, so containers do not share one host key.
 
-## 5. 建立／重建使用者環境
+## 5. Creating and rebuilding user environments
 
 ```bash
-cp lab.conf.example lab.conf    # 依需要調整（埠範圍、資源、對外位址）
+cp lab.conf.example lab.conf    # adjust as needed (port range, resources, bind address)
 
-sudo ./lab-init.sh alice                          # 建 alice 的容器，印出初始密碼
-sudo ./lab-init.sh bob --keygen                   # 金鑰模式：產生金鑰對
-sudo ./lab-reset.sh alice                         # 砍掉重建（清空資料、換新密碼）
-sudo ./lab-reset.sh alice --yes                   # 非互動
-sudo ./lab-ls.sh                                  # 看所有人（KEY 欄會顯示 password）
-sudo ./lab-remove.sh alice                        # 永久移除
-sudo ./lab-remove.sh bob --purge-key              # 金鑰模式：連金鑰一起刪
+sudo ./lab-init.sh alice                          # create alice's container, print the initial password
+sudo ./lab-init.sh bob --keygen                   # key mode: generate a key pair
+sudo ./lab-reset.sh alice                         # delete and recreate (wipes data, new password)
+sudo ./lab-reset.sh alice --yes                   # non-interactive
+sudo ./lab-ls.sh                                  # list users (the KEY column shows "password")
+sudo ./lab-remove.sh alice                        # remove permanently
+sudo ./lab-remove.sh bob --purge-key              # key mode: delete the key as well
 ```
 
-`lab-init.sh` 會依序：
+`lab-init.sh` does the following, in order:
 
-1. 檢查 Docker 與 `sysbox-runc` 是否可用、`lab-base` 是否存在（不存在就自動建置）。
-2. 預設密碼模式：產生隨機初始密碼並印出；`--keygen` 會產生 ed25519 金鑰到 `/var/lib/lab/keys/alice`，`--key` 可指定使用者自己的公鑰。
-3. 從 `LAB_PORT_BASE`（預設 2200）往上找沒被佔用的主機埠，對應容器內的 22/tcp。
-4. `docker run --runtime=sysbox-runc`，加上 CPU／記憶體／pids 上限與 `--restart unless-stopped`。
-5. 密碼模式：設定初始密碼並把 sshd drop-in 改為准密碼登入；金鑰模式：把公鑰放進容器內 `/home/lab/.ssh/authorized_keys`，並實際登入一次確認可用。
-6. 把埠、認證方式（`AUTH=password` 或 `key`）、金鑰路徑與資源寫進 `/var/lib/lab/users/alice.env`，供 `reset` 沿用同一組設定。
+1. Checks that Docker and `sysbox-runc` are available and that `lab-base` exists (builds it
+   automatically when missing).
+2. Password mode by default: generates a random initial password and prints it.
+   `--keygen` generates an ed25519 key pair in `/var/lib/lab/keys/alice`;
+   `--key` accepts the user's own public key.
+3. Finds a free host port starting at `LAB_PORT_BASE` (default 2200) and maps it to 22/tcp
+   in the container.
+4. Runs `docker run --runtime=sysbox-runc` with CPU, memory and pids limits plus
+   `--restart unless-stopped`.
+5. Password mode: sets the initial password and flips the sshd drop-in to allow password
+   logins. Key mode: installs the public key into
+   `/home/lab/.ssh/authorized_keys` and logs in once to confirm it works.
+6. Records the port, auth mode (`AUTH=password` or `key`), key path and resources in
+   `/var/lib/lab/users/alice.env`, so `reset` reuses the same settings.
 
-常用選項：
+Common options:
 
 ```bash
 sudo ./lab-init.sh bob --port 2210 --cpus 4 --memory 8g
 sudo ./lab-init.sh carol --key /home/carol/.ssh/id_ed25519.pub
-sudo ./lab-init.sh dave --keygen       # 金鑰模式：產生金鑰對
+sudo ./lab-init.sh dave --keygen       # key mode: generate a key pair
 ```
 
-## 6. 使用者會拿到什麼
+## 6. What the user gets
 
-預設密碼模式：把 `lab-init.sh` 印出的初始密碼用安全管道交給使用者，他這樣進來：
+Password mode (the default): hand over the initial password printed by `lab-init.sh`
+through a secure channel, and the user connects with:
 
 ```bash
-ssh -p 2200 lab@lab.example.com        # 打初始密碼
+ssh -p 2200 lab@lab.example.com        # then type the initial password
 ```
 
-金鑰模式（`--keygen`／`--key`）則把私鑰（`/var/lib/lab/keys/alice`）交給使用者：
+Key mode (`--keygen` / `--key`): hand over the private key
+(`/var/lib/lab/keys/alice`), and the user connects with:
 
 ```bash
 ssh -i alice -p 2200 lab@lab.example.com
 ```
 
-進來之後：
+Once inside:
 
 ```bash
 hostname                    # lab-alice
@@ -248,103 +286,123 @@ ps -p 1 -o comm=            # systemd
 sudo systemctl status ssh
 sudo apt install -y nginx && sudo systemctl enable --now nginx
 journalctl -u nginx -n 20
-docker run --rm hello-world # 他自己的 dockerd，映像與容器都在他的容器內
+docker run --rm hello-world # its own dockerd; images and containers live inside
 ```
 
-`lab-reset.sh` 重建後，容器內所有東西（home、套件、內層 Docker 映像與容器）都不會留下；
-認證方式與主機埠會沿用（密碼模式會產生新的初始密碼）。
+After `lab-reset.sh` recreates a container, nothing inside survives (home directory,
+packages, inner Docker images and containers). The auth mode and host port are kept
+(password mode issues a new initial password).
 
-## 7. 驗證清單
+## 7. Verification checklist
 
 ```bash
-docker exec lab-alice ps -p 1 -o pid,comm,args          # 應為 /sbin/init
-docker exec lab-alice systemctl is-active docker ssh    # 兩個都要 active
+docker exec lab-alice ps -p 1 -o pid,comm,args          # should be /sbin/init
+docker exec lab-alice systemctl is-active docker ssh    # both must be active
 docker exec lab-alice docker info >/dev/null && echo inner-docker-ok
-docker exec lab-alice docker run --rm hello-world       # 內層容器能跑
-docker exec lab-alice cat /etc/lab-release              # 確認基底參照與發行版
-ssh -p 2200 lab@127.0.0.1                                 # 密碼模式：打 lab-init 印出的初始密碼
-ssh -i /var/lib/lab/keys/alice -p 2200 -o BatchMode=yes lab@127.0.0.1 id   # 金鑰模式（--keygen／--key）
+docker exec lab-alice docker run --rm hello-world       # inner container runs
+docker exec lab-alice cat /etc/lab-release              # base reference and release
+ssh -p 2200 lab@127.0.0.1                               # password mode: type the initial password
+ssh -i /var/lib/lab/keys/alice -p 2200 -o BatchMode=yes lab@127.0.0.1 id   # key mode (--keygen / --key)
 ```
 
-## 8. 團隊共用一個容器（可選）
+## 8. A team sharing one container (optional)
 
-預設是每人一容器。如果需求其實是「一組人共用同一台機器」（同一個 systemd、同一個 dockerd、
-同一個主機埠），改用 `lab-team.sh`：
+The default is one container per user. If the actual requirement is "a group of people
+sharing one machine" (the same systemd, the same dockerd, one host port), use
+`lab-team.sh`:
 
 ```bash
-sudo ./lab-team.sh init --name dev                     # 容器 lab-dev
-sudo ./lab-team.sh add alice --name dev                # 建立帳號並印出初始密碼
+sudo ./lab-team.sh init --name dev                     # container lab-dev
+sudo ./lab-team.sh add alice --name dev                # create the account, print the initial password
 sudo ./lab-team.sh add bob --name dev --key /home/bob/.ssh/id_ed25519.pub
-sudo ./lab-team.sh add carol --name dev --keygen      # 金鑰模式：產生金鑰對
+sudo ./lab-team.sh add carol --name dev --keygen       # key mode: generate a key pair
 sudo ./lab-team.sh ls
 sudo ./lab-team.sh remove bob --name dev --purge-key
-sudo ./lab-team.sh reset --name dev                    # 砍掉重建，依名單把成員加回來
+sudo ./lab-team.sh reset --name dev                    # recreate, then re-add members from the list
 sudo ./lab-team.sh destroy --name dev
 ```
 
-每位成員是容器內獨立的 OS 帳號（`labteam` 群組，`sudo` NOPASSWD，`docker` 群組），家目錄分開，
-但**成員之間沒有隔離**：
+Each member is a separate OS account inside the container (`labteam` group, `sudo`
+NOPASSWD, `docker` group) with its own home directory, but **members are not isolated from
+each other**:
 
-- 同一個 PID namespace、同一個 dockerd、同一個網路，`ps` 看得到別人的程序。
-- 任何人都能 `sudo`、也都能操作 docker（等同 root），所以讀得到別人的檔案。
-- CPU／記憶體上限是整組共用（`--cpus`／`--memory` 加在容器上）。
-- `reset` 是整組重置：所有成員的家目錄與內層 Docker 資料都會消失；成員名單與金鑰會保留並自動加回。
-- `lab` 是保留帳號（沒有金鑰就登不進去），不要拿來當成員名稱。
+- Same PID namespace, same dockerd, same network: `ps` shows everyone's processes.
+- Anyone can `sudo` and drive docker (equivalent to root), so they can read each other's files.
+- CPU and memory limits apply to the whole container (`--cpus` / `--memory` on the container).
+- `reset` resets the whole team: every home directory and all inner Docker data is wiped;
+  the member list and keys are kept and re-applied automatically.
+- `lab` is a reserved account (it cannot log in without a key); do not use it as a member name.
 
-實作細節：加入成員時會把名字寫進 sshd 的 `AllowUsers`（`sshd_config.d/00-lab.conf`）並 reload，
-然後等 listener 真的能連才返回；移除時先 `pkill -KILL -u` 收掉該成員的程序，再 `userdel -r`，
-避免「user is currently used by process」而刪不掉。
+Implementation notes: adding a member writes the name into sshd's `AllowUsers`
+(`sshd_config.d/00-lab.conf`) and reloads sshd, then waits until the listener actually
+accepts connections. Removing a member runs `pkill -KILL -u` first, then `userdel -r`, to
+avoid the "user is currently used by process" failure.
 
-## 9. 安全與資料邊界
+## 9. Security and data boundaries
 
-- 基底是 **Ubuntu 22.04 jammy**（標準支援到 2027-04，ESM 到 2032）。18.04 版本已不再使用，
-  定義留在 `lab-base/Dockerfile.bionic` 供對照。
-- 內層 Docker 是 base 映像帶的 **20.10.17（2022 年）**，不是現在的版本。離線環境不能用 `docker pull`，
-  練習 `build`／`run`／`load` 沒問題；要換成新版 Docker CE，得在有網路的機器重建 `lab-base`。
-- 映像原本的 `admin:admin` 已鎖、root 不可 SSH，映像層的 sshd 是金鑰限定。
-  但 `lab-init.sh`／`lab-team.sh` 預設會在容器內把 drop-in 改成 `PasswordAuthentication yes`
-  並發一組隨機初始密碼，所以**實際防線是那組密碼加上你綁定的位址**（`LAB_BIND` 預設 `0.0.0.0`）。
-  金鑰模式（`--keygen`／`--key`）私鑰只存在主機 `/var/lib/lab/keys/`（目錄 700），
-  不要用聊天軟體或明碼管道傳；密碼模式的初始密碼只印一次、不落檔，弄丟就 `lab-reset.sh` 重發。
-- 不掛主機的 `/var/run/docker.sock`、不加 `--privileged`；內層 Docker 是容器內獨立的 daemon。
-- Sysbox 用 user namespace 把容器 root 對映到主機非特權 UID，但**仍共用主機 kernel**。
-  需要 kernel module、核心版本測試或強隔離邊界時，請改用 VM。
-- 團隊共用容器（`lab-team.sh`）沒有成員間隔離：大家共用同一個 systemd／dockerd，每個人都能 sudo 與操作 docker。
-  只適合互相信任的小團隊；要隔離就用每人一容器。
-- `LAB_BIND` 預設 `0.0.0.0`，SSH 直接對外。請用防火牆限制來源，或改成內網 IP／`127.0.0.1` 加跳板。
-- `lab-reset.sh` 是刪除後重建，不是重開機；要留存資料得另外規劃 volume 或備份。
-- 映像固定 digest，升級映像等於換環境，要明確改 digest 並重測。
+- The base is **Ubuntu 22.04 jammy** (standard support until 2027-04, ESM until 2032).
+  The 18.04 version is no longer used; its definition remains in
+  `lab-base/Dockerfile.bionic` for reference.
+- The inner Docker is **20.10.17 (from 2022)**, the version shipped in the base image, not
+  a current release. Offline hosts cannot `docker pull` anyway; `build` / `run` / `load`
+  work fine. To move to a current Docker CE, rebuild `lab-base` on a machine with
+  internet access.
+- The image's `admin:admin` is locked, root cannot log in over SSH, and sshd at the image
+  layer is key-only. However `lab-init.sh` / `lab-team.sh` flip the drop-in to
+  `PasswordAuthentication yes` by default and issue a random initial password, so **the
+  real line of defence is that password plus the address you bind to** (`LAB_BIND`
+  defaults to `0.0.0.0`). In key mode (`--keygen` / `--key`) the private key lives only on
+  the host under `/var/lib/lab/keys/` (directory mode 700); do not send it over chat apps
+  or plaintext channels. In password mode the initial password is printed once and never
+  stored, so losing it means `lab-reset.sh` to issue a new one.
+- The host's `/var/run/docker.sock` is not mounted and `--privileged` is not used; the
+  inner Docker is an independent daemon inside the container.
+- Sysbox maps the container root to a non-privileged UID on the host via user namespaces,
+  but **the host kernel is still shared**. For kernel modules, kernel-version testing or a
+  strong isolation boundary, use a VM instead.
+- Team containers (`lab-team.sh`) have no member-to-member isolation: everyone shares one
+  systemd and one dockerd, and everyone can `sudo` and drive docker. Only suitable for
+  small teams that trust each other; use one container per user when you need isolation.
+- `LAB_BIND` defaults to `0.0.0.0`, so SSH is exposed directly. Restrict the source with a
+  firewall, or bind to an internal IP / `127.0.0.1` behind a jump host.
+- `lab-reset.sh` deletes and recreates; it is not a reboot. Plan volumes or backups if data
+  must survive.
+- The image pins a digest; upgrading the image means a new environment, so change the
+  digest explicitly and re-verify.
 
-## 10. 疑難排解
+## 10. Troubleshooting
 
-| 現象 | 檢查 |
+| Symptom | Check |
 |---|---|
-| `Unknown runtime specified sysbox-runc` | `/etc/docker/daemon.json` 沒有註冊，或 Docker 沒重啟 |
-| 容器一啟動就結束 | 啟動命令被覆寫掉了；要保持映像預設的 `/sbin/init` |
-| SSH 連不上 | `docker logs lab-alice`、`docker exec lab-alice systemctl status ssh`、檢查 `authorized_keys` 權限 |
-| `Failed to setup docker volume manager` | `/var/lib/sysbox`、`/var/lib/docker` 需要 ext4 或 btrfs |
-| 埠衝突 | 用 `--port` 指定，或調高 `LAB_PORT_BASE` |
-| 內層 `docker` 沒權限 | 確認容器內 `id lab` 有 `docker` 群組 |
+| `Unknown runtime specified sysbox-runc` | `/etc/docker/daemon.json` lacks the runtime, or Docker was not restarted |
+| Container exits immediately | The start command was overridden; keep the image's default `/sbin/init` |
+| Cannot connect over SSH | `docker logs lab-alice`, `docker exec lab-alice systemctl status ssh`, `authorized_keys` permissions |
+| `Failed to setup docker volume manager` | `/var/lib/sysbox` and `/var/lib/docker` must be on ext4 or btrfs |
+| Port conflict | Pass `--port`, or raise `LAB_PORT_BASE` |
+| No permission for the inner `docker` | Check that `id lab` inside the container includes the `docker` group |
 
-## 11. 授權
+## 11. License
 
-本專案的程式碼（`lab-*.sh`、`lib/`、`lab-base/Dockerfile*`）與文件以
-**Apache License 2.0** 授權，全文見 [`LICENSE`](LICENSE)；元件與商標注意事項見 [`NOTICE`](NOTICE)。
+This project's code (`lab-*.sh`, `lib/`, `lab-base/Dockerfile*`) and documentation are
+licensed under the **Apache License 2.0**; see [`LICENSE`](LICENSE). Component and
+trademark notes are in [`NOTICE`](NOTICE).
 
-`lab-base` 映像**不在授權範圍內**：
+The `lab-base` image is **not** covered by that license:
 
-- 它是 Ubuntu 22.04 使用者空間的衍生品，每個套件各自授權，授權全文在映像內
-  `/usr/share/doc/<package>/copyright`。
-- 它是「修改過的 Ubuntu」（加了帳號、改了 sshd、刪了主機金鑰）。Canonical 的
-  [IP 政策](https://canonical.com/legal/intellectual-property-policy)允許為組織內部使用修改，
-  但對外散布修改版必須經 Canonical 認可，或移除並替換 Ubuntu 商標。
-- 因此本專案不隨 repo 或 release 散布映像；請用 `lab-base/Dockerfile` 自行建置。
-  若要對外散布自建映像，需自行處理商標與各套件授權（含 GPL／LGPL 源碼提供）。
+- It is a derivative of the Ubuntu 22.04 userland; each package carries its own license,
+  with the full text inside the image at `/usr/share/doc/<package>/copyright`.
+- It is a *modified* Ubuntu (accounts added, sshd changed, host keys removed). Canonical's
+  [IP policy](https://canonical.com/legal/intellectual-property-policy) permits
+  modification for internal organisational use, but redistributing a modified version
+  requires Canonical's approval or the removal and replacement of Ubuntu trademarks.
+- This project therefore does not ship the image through the repo or releases; build it
+  yourself with `lab-base/Dockerfile`. If you redistribute a self-built image, handle the
+  trademarks and per-package licenses (including GPL/LGPL source obligations) yourself.
 
-## 12. 官方資料
+## 12. References
 
-- Sysbox 概念：<https://github.com/nestybox/sysbox/blob/master/docs/user-guide/concepts.md>
-- Systemd quickstart：<https://github.com/nestybox/sysbox/blob/master/docs/quickstart/systemd.md>
-- Docker-in-Docker quickstart：<https://github.com/nestybox/sysbox/blob/master/docs/quickstart/dind.md>
-- 安裝與設定：<https://github.com/nestybox/sysbox/blob/master/docs/user-guide/install-package.md>
-- 相容發行版：<https://github.com/nestybox/sysbox/blob/master/docs/distro-compat.md>
+- Sysbox concepts: <https://github.com/nestybox/sysbox/blob/master/docs/user-guide/concepts.md>
+- Systemd quickstart: <https://github.com/nestybox/sysbox/blob/master/docs/quickstart/systemd.md>
+- Docker-in-Docker quickstart: <https://github.com/nestybox/sysbox/blob/master/docs/quickstart/dind.md>
+- Install and configure: <https://github.com/nestybox/sysbox/blob/master/docs/user-guide/install-package.md>
+- Compatible distributions: <https://github.com/nestybox/sysbox/blob/master/docs/distro-compat.md>
