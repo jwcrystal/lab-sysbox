@@ -1,0 +1,37 @@
+lab-sysbox
+Copyright 2026 Jared Wang
+
+本專案的程式碼（lab-*.sh、lib/、lab-base/Dockerfile*）與文件以
+Apache License 2.0 授權，全文見 LICENSE。
+
+本專案只提供「建置與操作方式」，不隨附、也不再散布下列元件：
+
+1. Sysbox CE 0.7.1（Nestybox / Docker）
+   授權：Apache License 2.0
+   來源：https://github.com/nestybox/sysbox
+   本專案只說明如何安裝使用者自行取得的 sysbox-ce deb，未修改其內容。
+
+2. Ubuntu 22.04（jammy）使用者空間
+   Ubuntu 是聚合著作（aggregate work），每個套件各自授權
+   （GPL-2.0／GPL-3.0／LGPL／MIT／BSD／Apache-2.0 等），
+   授權全文在映像內 /usr/share/doc/<package>/copyright。
+   Ubuntu 名稱與標誌是 Canonical Ltd. 的商標。Canonical 的 IP 政策允許
+   為個人或組織內部使用修改 Ubuntu；但修改後的 Ubuntu 若要對外散布，
+   必須經 Canonical 認可，或移除並替換其商標：
+   https://canonical.com/legal/intellectual-property-policy
+
+3. Docker CE 與 containerd
+   授權：Apache License 2.0
+
+4. base 映像 nestybox/ubuntu-jammy-systemd-docker
+   其建置來源（nestybox/sysbox 專案）為 Apache License 2.0，但映像內容
+   仍是 Ubuntu 使用者空間，不因此整包變成 Apache-2.0；該映像在 Docker Hub
+   上也沒有標示授權或 SPDX label。
+
+因此：
+
+- 本專案 repo 內的程式碼：Apache-2.0。
+- 用 lab-base/Dockerfile 建出的 lab-base 映像：不是 Apache-2.0，也不隨本專案對外散布。
+- 這個映像屬於「修改過的 Ubuntu」，組織內部使用沒有問題；若要對外散布，
+  請自行處理 Ubuntu 商標（os-release、/etc/issue 等）與各套件授權，
+  包含 GPL／LGPL 的對應源碼提供義務。

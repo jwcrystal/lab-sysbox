@@ -22,6 +22,8 @@ Linux 主機（共用 kernel）
 | `lab-base-amd64.tar.gz` | 已建好的 `lab-base:latest`（linux/amd64），離線主機 `docker load` 用 |
 | `sysbox-ce_0.7.1.linux_amd64.deb` | Sysbox CE v0.7.1 安裝檔 |
 | `offline-deps/<發行版>/*.deb` | Sysbox 安裝依賴（`jq`、`fuse`、`rsync`、`iptables` 等） |
+| `LICENSE` | Apache License 2.0（只涵蓋本專案的程式碼與文件） |
+| `NOTICE` | 元件授權與 Ubuntu 商標注意事項 |
 | `lab-init.sh` | 建一位使用者的容器（預設密碼登入；`--key`／`--keygen` 走金鑰） |
 | `lab-reset.sh` | 砍掉該容器再重建（清空該使用者所有資料） |
 | `lab-ls.sh` | 列出所有使用者、埠、狀態 |
@@ -97,6 +99,9 @@ docker info --format '{{json .Runtimes}}' | jq
 ```
 
 搬過去（含腳本、deb、依賴包）：離線發布包已打包成單一檔 `lab-sysbox-bundle.tar`（約 300 MB）。
+
+> 對外開源時不要把這個包上傳成 release asset：裡面是**修改過的 Ubuntu 映像**，
+> 授權與商標問題見「授權」一節。內部使用不受影響。
 
 ```bash
 scp lab-sysbox-bundle.tar lab-host:/srv/
@@ -303,7 +308,22 @@ sudo ./lab-team.sh destroy --name dev
 | 埠衝突 | 用 `--port` 指定，或調高 `LAB_PORT_BASE` |
 | 內層 `docker` 沒權限 | 確認容器內 `id lab` 有 `docker` 群組 |
 
-## 11. 官方資料
+## 11. 授權
+
+本專案的程式碼（`lab-*.sh`、`lib/`、`lab-base/Dockerfile*`）與文件以
+**Apache License 2.0** 授權，全文見 [`LICENSE`](LICENSE)；元件與商標注意事項見 [`NOTICE`](NOTICE)。
+
+`lab-base` 映像**不在授權範圍內**：
+
+- 它是 Ubuntu 22.04 使用者空間的衍生品，每個套件各自授權，授權全文在映像內
+  `/usr/share/doc/<package>/copyright`。
+- 它是「修改過的 Ubuntu」（加了帳號、改了 sshd、刪了主機金鑰）。Canonical 的
+  [IP 政策](https://canonical.com/legal/intellectual-property-policy)允許為組織內部使用修改，
+  但對外散布修改版必須經 Canonical 認可，或移除並替換 Ubuntu 商標。
+- 因此本專案不隨 repo 或 release 散布映像；請用 `lab-base/Dockerfile` 自行建置。
+  若要對外散布自建映像，需自行處理商標與各套件授權（含 GPL／LGPL 源碼提供）。
+
+## 12. 官方資料
 
 - Sysbox 概念：<https://github.com/nestybox/sysbox/blob/master/docs/user-guide/concepts.md>
 - Systemd quickstart：<https://github.com/nestybox/sysbox/blob/master/docs/quickstart/systemd.md>
