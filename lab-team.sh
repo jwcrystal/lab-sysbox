@@ -35,6 +35,8 @@ usage() {
   -k, --key FILE    add 時指定私鑰（或 *.pub 公鑰）＝金鑰模式
       --keygen      add 時幫成員產生金鑰對＝金鑰模式
       --password    產生隨機初始密碼、走密碼登入（預設行為）
+      --publish SPEC init/reset 時額外發佈 HOST:CONTAINER（可重複或逗號分隔）
+      --block RANGE  init/reset 時沿用指定埠區段（例如 30000-30009）
       --cpus N      容器的 CPU 上限（整組共用）
       --memory SIZE 容器的記憶體上限（整組共用）
       --purge-key   remove 時一併刪除金鑰
@@ -71,6 +73,9 @@ password_explicit=0
 keygen_mode=0
 assume_yes=0
 member=""
+block_spec=""
+publish=()
+publish_given=0
 
 while (($#)); do
   case "$1" in
@@ -82,6 +87,15 @@ while (($#)); do
     --memory) memory="${2:-}"; shift 2 ;;
     --purge-key) purge_key=1; shift ;;
     --password) use_password=1; password_explicit=1; shift ;;
+    --publish)
+      publish_given=1
+      IFS=',' read -r -a _specs <<<"${2:-}"
+      for _s in "${_specs[@]}"; do
+        [[ -n "${_s}" ]] && publish+=("$(parse_publish_spec "${_s}")")
+      done
+      shift 2
+      ;;
+    --block) block_spec="$(parse_block_spec "${2:-}")"; shift 2 ;;
     --no-wait) wait_ready=0; shift ;;
     -y | --yes) assume_yes=1; shift ;;
     -h | --help) usage; exit 0 ;;
@@ -206,6 +220,38 @@ do_init() {
 
   port="$(team_ports)"
 
+  local block="" bp bs be reservation=""
+  if [[ -n "${block_spec}" ]]; then
+    block="${block_spec}"
+    bs="${block%-*}"
+    be="${block#*-}"
+    for ((bp = bs; bp <= be; bp++)); do
+      port_busy "${bp}" && die "埠區段 ${block} 內的 ${bp} 已被佔用"
+    done
+  elif ((LAB_PORT_BLOCK > 0)); then
+    block="$(allocate_block)"
+    reservation="$(reserve_block "${block}")"
+    trap '[[ -n "${reservation:-}" ]] && release_reservation "${reservation}"' EXIT
+    if [[ "${LAB_BIND}" == "0.0.0.0" || "${LAB_BIND}" == "::" ]]; then
+      note "注意：LAB_BIND=${LAB_BIND}，區段 ${block} 會對外公開；建議改成內網位址或加防火牆"
+    fi
+  fi
+
+  local spec hp
+  for spec in ${publish[@]+"${publish[@]}"}; do
+    hp="${spec%%:*}"
+    [[ "${hp}" == "${port}" ]] && die "--publish ${spec} 與 SSH 埠 ${port} 衝突"
+    port_busy "${hp}" && die "--publish 主機埠 ${hp} 已被其他容器或程序使用"
+  done
+
+  local -a publish_args=()
+  for spec in ${publish[@]+"${publish[@]}"}; do
+    publish_args+=(-p "${LAB_BIND}:${spec}")
+  done
+  if [[ -n "${block}" ]]; then
+    publish_args+=(-p "${LAB_BIND}:${block%-*}-${block#*-}:${block%-*}-${block#*-}")
+  fi
+
   local -a run_args=()
   if [[ -n "${LAB_PLATFORM:-}" ]]; then
     run_args+=(--platform "${LAB_PLATFORM}")
@@ -228,8 +274,12 @@ do_init() {
     --pids-limit "${LAB_PIDS_LIMIT}" \
     --label "lab.team=${team}" \
     --label "lab.port=${port}" \
+    "${publish_args[@]+"${publish_args[@]}"}" \
     -p "${LAB_BIND}:${port}:22" \
-    "${LAB_IMAGE}" >/dev/null
+    "${LAB_IMAGE}" >/dev/null || {
+      docker rm -f "${c}" >/dev/null 2>&1 || true
+      die "建立容器失敗（常見原因：埠被占用或權限不足）"
+    }
 
   # 共用容器的 sudo 規則：成員放在 labteam 群組，NOPASSWD。
   docker exec -i -u root "${c}" bash -s <<'EOS'
@@ -249,9 +299,13 @@ CPUS=${cpus}
 MEMORY=${memory}
 IMAGE=${LAB_IMAGE}
 RUNTIME=${LAB_RUNTIME}
+PUBLISH=$(IFS=,; printf '%s' "${publish[*]}")
+PORT_BLOCK=${block}
 CREATED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 EOF
   chmod 600 "${s}"
+  release_reservation "${reservation}"
+  reservation=""
 
   local ready=0
   if ((wait_ready)); then
@@ -269,6 +323,12 @@ EOF
 
   printf '\n團隊 %s 已建立（容器 %s）\n' "${team}" "${c}"
   printf '  埠：%s:%s -> 22\n' "${LAB_BIND}" "${port}"
+  if [[ -n "${block}" ]]; then
+    printf '  對外埠：%s（內外同號，綁 %s）\n' "${block}" "${LAB_BIND}"
+  fi
+  for spec in ${publish[@]+"${publish[@]}"}; do
+    printf '  對外埠：%s -> 容器 %s\n' "${spec%%:*}" "${spec##*:}"
+  done
   printf '  加成員：%s/lab-team.sh add <成員> --name %s\n' "${SELF_DIR}" "${team}"
   printf '  列表：  %s/lab-team.sh ls\n' "${SELF_DIR}"
   ((ready)) || printf '  注意：sshd 尚未確認就緒，先看 docker logs %s\n' "${c}"
@@ -276,6 +336,9 @@ EOF
 
 do_add() {
   [[ -n "${member}" ]] || { usage; exit 2; }
+  if ((publish_given)) || [[ -n "${block_spec}" ]]; then
+    die "埠屬於容器層級，請在 lab-team.sh init（或 reset）時指定"
+  fi
   valid_user "${member}" || die "成員名稱只接受小寫英數與連字號，長度 2 到 31 字元"
   [[ "${member}" != "lab" ]] || die "lab 是容器保留帳號，換一個名字"
   require_docker
@@ -452,9 +515,12 @@ do_ls() {
       status="$(docker inspect -f '{{.State.Status}}' "${c}")"
     fi
     members=("$(team_dir "${NAME}")"/members/*.env)
-    printf 'TEAM %s  (container %s, port %s, %s, %d 位成員)\n' \
-      "${NAME}" "${c}" "${PORT}" "${status}" "${#members[@]}"
-    for mf in "${members[@]}"; do
+    local pubs="${PUBLISH:-}" blk="${PORT_BLOCK:-}" portinfo=""
+    [[ -n "${pubs}" ]] && portinfo="publish ${pubs}"
+    [[ -n "${blk}" ]] && portinfo="${portinfo:+${portinfo}, }block ${blk}"
+    printf 'TEAM %s  (container %s, port %s, %s, %d 位成員%s)\n' \
+      "${NAME}" "${c}" "${PORT}" "${status}" "${#members[@]}" "${portinfo:+, ${portinfo}}"
+    for mf in ${members[@]+"${members[@]}"}; do
       [[ -e "${mf}" ]] || continue
       local MEMBER="" KEY="" AUTH=""
       while IFS= read -r line; do
@@ -490,6 +556,7 @@ do_reset() {
   fi
 
   local old_port="${PORT}" old_cpus="${CPUS}" old_memory="${MEMORY}" s
+  local old_publish="${PUBLISH:-}" old_block="${PORT_BLOCK:-}"
   s="$(team_state "${team}")"
   cp -p "${s}" "${s}.bak"
 
@@ -497,9 +564,22 @@ do_reset() {
   docker rm -f "${c}" >/dev/null 2>&1 || true
   rm -f "${s}"
 
+  local -a init_args=(--name "${team}" --port "${old_port}" --cpus "${old_cpus}" --memory "${old_memory}")
+  if ((!publish_given)) && [[ -n "${old_publish}" ]]; then
+    IFS=',' read -r -a _stored <<<"${old_publish}"
+    publish=("${_stored[@]}")
+  fi
+  for spec in ${publish[@]+"${publish[@]}"}; do
+    init_args+=(--publish "${spec}")
+  done
+  if [[ -n "${block_spec}" ]]; then
+    init_args+=(--block "${block_spec}")
+  elif [[ -n "${old_block}" ]]; then
+    init_args+=(--block "${old_block}")
+  fi
+
   note "重建 ${c}"
-  if ! "${SELF_DIR}/lab-team.sh" init --name "${team}" --port "${old_port}" \
-    --cpus "${old_cpus}" --memory "${old_memory}" >/dev/null; then
+  if ! "${SELF_DIR}/lab-team.sh" init "${init_args[@]}" >/dev/null; then
     # 重建失敗時把名單留著，處理完可以再 reset 一次。
     mv "${s}.bak" "${s}"
     die "重建失敗；成員名單已保留，處理後可再執行 lab-team.sh reset --name ${team}"
@@ -509,7 +589,7 @@ do_reset() {
   shopt -s nullglob
   local members=("$(team_dir "${team}")"/members/*.env) mf m k auth out pw
   local -a pw_report=()
-  for mf in "${members[@]}"; do
+  for mf in ${members[@]+"${members[@]}"}; do
     m=""
     k=""
     auth=""

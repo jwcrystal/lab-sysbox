@@ -23,6 +23,13 @@ LAB_ACCOUNT=lab
 # 狀態、金鑰放哪（需要寫入權限）
 LAB_STATE_DIR=/var/lib/lab
 
+# 自動配給每位使用者的對外埠區段大小；0 = 關閉（只發佈 SSH）
+# 開啟後內外同號，例如 30000-30009 對 30000-30009
+LAB_PORT_BLOCK=0
+
+# 區段起始埠
+LAB_PORT_BLOCK_BASE=30000
+
 # 印給使用者的主機名稱；留空則顯示提示字串
 LAB_SSH_TARGET=
 

@@ -15,14 +15,19 @@ usage() {
 已存在時不覆蓋，請改用 lab-reset.sh。
 
 選項：
-  -p, --port N       指定主機連接埠（預設從 LAB_PORT_BASE 起找空的）
+  -p, --port N       指定 SSH 主機連接埠（預設從 LAB_PORT_BASE 起找空的）
   -k, --key FILE     金鑰模式：指定私鑰檔（或使用者自己的 *.pub 公鑰）
       --keygen       金鑰模式：自動產生金鑰於 ${LAB_STATE_DIR}/keys/<使用者>
       --password     密碼登入：產生隨機初始密碼（預設行為）
+      --publish SPEC 額外發佈 HOST:CONTAINER（可重複或逗號分隔，例如 8080:80）
+      --block RANGE  沿用指定埠區段（reset 用，例如 30000-30009）
       --cpus N       覆寫 CPU 上限
       --memory SIZE  覆寫記憶體上限，例如 4g
       --no-wait      不等待 SSH 可登入
   -h, --help         顯示本說明
+
+環境變數 LAB_PORT_BLOCK=N 會自動配一段連續埠（預設 0＝關閉），
+區段大小 N、起始 LAB_PORT_BLOCK_BASE（預設 30000），內外同號。
 EOF
 }
 
@@ -35,6 +40,8 @@ wait_ready=1
 use_password=1
 password_explicit=0
 keygen_mode=0
+block_spec=""
+publish=()
 
 while (($#)); do
   case "$1" in
@@ -44,6 +51,14 @@ while (($#)); do
     --cpus) cpus="${2:-}"; shift 2 ;;
     --memory) memory="${2:-}"; shift 2 ;;
     --password) use_password=1; password_explicit=1; shift ;;
+    --publish)
+      IFS=',' read -r -a _specs <<<"${2:-}"
+      for _s in "${_specs[@]}"; do
+        [[ -n "${_s}" ]] && publish+=("$(parse_publish_spec "${_s}")")
+      done
+      shift 2
+      ;;
+    --block) block_spec="${2:-}"; shift 2 ;;
     --no-wait) wait_ready=0; shift ;;
     -h | --help) usage; exit 0 ;;
     -*) die "未知選項：$1" ;;
@@ -62,9 +77,10 @@ if [[ -n "${key}" ]] || ((keygen_mode)); then
 fi
 
 [[ -n "${account}" ]] || { usage; exit 2; }
-valid_user "${account}" || die "使用者名稱只接受小寫英數與連字號，長度 2 到 31 字元"
+valid_user "${account}" || die "使用者名稱只接受小寫英數、連字號與底線，長度 2 到 31 字元"
 [[ -z "${port}" || "${port}" =~ ^[0-9]+$ ]] || die "連接埠必須是數字"
 [[ -z "${port}" ]] || ((port > 0 && port < 65536)) || die "連接埠超出範圍"
+[[ -z "${block_spec}" ]] || block_spec="$(parse_block_spec "${block_spec}")"
 
 require_docker
 require_sysbox
@@ -81,6 +97,15 @@ fi
 
 mkdir -p "${LAB_STATE_DIR}/users" "$(key_dir)"
 chmod 700 "${LAB_STATE_DIR}" "$(key_dir)" 2>/dev/null || true
+
+# 從這裡開始配置連接埠，先上鎖避免兩個 init 搶到同一段。
+lock="$(lab_lock)"
+reservation=""
+cleanup() {
+  [[ -n "${reservation}" ]] && release_reservation "${reservation}"
+  lab_unlock "${lock}"
+}
+trap cleanup EXIT
 
 # 預設密碼模式：設隨機初始密碼，不碰金鑰。
 # 金鑰模式（--key 指定鑰檔／*.pub，或 --keygen 產生）：注入公鑰。
@@ -107,11 +132,35 @@ else
   fi
 fi
 
-# 連接埠：指定的話先確認沒被佔用。
+# SSH 連接埠：指定的話先確認沒被佔用。
 if [[ -z "${port}" ]]; then
   port="$(free_port)"
-elif port_in_use "${port}"; then
-  die "主機連接埠 ${port} 已被其他容器或紀錄使用"
+elif port_busy "${port}"; then
+  die "主機連接埠 ${port} 已被其他容器或程序使用"
+fi
+
+# 明確發佈的埠：檢查格式以外的衝突（不可撞 SSH 埠、不可被佔用）。
+for spec in ${publish[@]+"${publish[@]}"}; do
+  hp="${spec%%:*}"
+  [[ "${hp}" == "${port}" ]] && die "--publish ${spec} 與 SSH 埠 ${port} 衝突"
+  port_busy "${hp}" && die "--publish 主機埠 ${hp} 已被其他容器或程序使用"
+done
+
+# 自動區段：reset 時沿用指定的區段，否則依 LAB_PORT_BLOCK 配一段。
+block=""
+if [[ -n "${block_spec}" ]]; then
+  block="${block_spec}"
+  s="${block%-*}"
+  e="${block#*-}"
+  for ((p = s; p <= e; p++)); do
+    port_busy "${p}" && die "埠區段 ${block} 內的 ${p} 已被佔用；請改用其他區段或直接重建"
+  done
+elif ((LAB_PORT_BLOCK > 0)); then
+  block="$(allocate_block)"
+  reservation="$(reserve_block "${block}")"
+  if [[ "${LAB_BIND}" == "0.0.0.0" || "${LAB_BIND}" == "::" ]]; then
+    note "注意：LAB_BIND=${LAB_BIND}，區段 ${block} 會對外公開；建議改成內網位址或加防火牆"
+  fi
 fi
 
 note "建立 ${name}（runtime=${LAB_RUNTIME} image=${LAB_IMAGE} port=${LAB_BIND}:${port}->22）"
@@ -119,7 +168,20 @@ run_args=()
 if [[ -n "${LAB_PLATFORM:-}" ]]; then
   run_args+=(--platform "${LAB_PLATFORM}")
 fi
-docker run -d \
+if [[ -n "${LAB_EXTRA_RUN_ARGS:-}" ]]; then
+  read -r -a _extra <<<"${LAB_EXTRA_RUN_ARGS}"
+  run_args+=("${_extra[@]}")
+fi
+
+publish_args=()
+for spec in ${publish[@]+"${publish[@]}"}; do
+  publish_args+=(-p "${LAB_BIND}:${spec}")
+done
+if [[ -n "${block}" ]]; then
+  publish_args+=(-p "${LAB_BIND}:${block%-*}-${block#*-}:${block%-*}-${block#*-}")
+fi
+
+if ! docker run -d \
   --name "${name}" \
   --hostname "${name}" \
   --runtime "${LAB_RUNTIME}" \
@@ -131,8 +193,12 @@ docker run -d \
   --pids-limit "${LAB_PIDS_LIMIT}" \
   --label "lab.user=${account}" \
   --label "lab.port=${port}" \
+  "${publish_args[@]+"${publish_args[@]}"}" \
   -p "${LAB_BIND}:${port}:22" \
-  "${LAB_IMAGE}" >/dev/null
+  "${LAB_IMAGE}" >/dev/null; then
+  docker rm -f "${name}" >/dev/null 2>&1 || true
+  die "建立容器失敗（常見原因：埠被占用或權限不足）"
+fi
 
 if ((use_password)); then
   # 密碼模式：chpasswd 設初始密碼（同時解掉映像內建的 passwd -l），
@@ -161,7 +227,7 @@ else
     "chown '${LAB_ACCOUNT}:${LAB_ACCOUNT}' /home/${LAB_ACCOUNT}/.ssh/authorized_keys && chmod 600 /home/${LAB_ACCOUNT}/.ssh/authorized_keys"
 fi
 
-# 狀態檔：reset 時用它還原同樣的連接埠與金鑰。
+# 狀態檔：reset 時用它還原同樣的連接埠、區段、發佈與金鑰。
 cat >"$(state_file "${account}")" <<EOF
 USER=${account}
 PORT=${port}
@@ -171,9 +237,13 @@ IMAGE=${LAB_IMAGE}
 RUNTIME=${LAB_RUNTIME}
 KEY=${key}
 AUTH=$(((use_password)) && echo password || echo key)
+PUBLISH=$(IFS=,; printf '%s' "${publish[*]}")
+PORT_BLOCK=${block}
 CREATED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 EOF
 chmod 600 "$(state_file "${account}")"
+release_reservation "${reservation}"
+reservation=""
 
 ready=0
 if ((wait_ready)); then
@@ -214,6 +284,12 @@ elif ((key_is_public)); then
 else
   printf '  SSH：ssh -i %s -p %s %s@%s\n' "${key}" "${port}" "${LAB_ACCOUNT}" "${login_host}"
 fi
+if [[ -n "${block}" ]]; then
+  printf '  對外埠：%s（內外同號，綁 %s）\n' "${block}" "${LAB_BIND}"
+fi
+for spec in ${publish[@]+"${publish[@]}"}; do
+  printf '  對外埠：%s -> 容器 %s\n' "${spec%%:*}" "${spec##*:}"
+done
 printf '  容器：docker exec -it %s bash（管理員）\n' "${name}"
 printf '  重建：%s/lab-reset.sh %s（會清空該使用者所有資料）\n' "${SELF_DIR}" "${account}"
 ((ready)) || {

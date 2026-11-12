@@ -265,6 +265,12 @@ Common options:
 sudo ./lab-init.sh bob --port 2210 --cpus 4 --memory 8g
 sudo ./lab-init.sh carol --key /home/carol/.ssh/id_ed25519.pub
 sudo ./lab-init.sh dave --keygen       # key mode: generate a key pair
+
+# Publish extra service ports (repeatable)
+sudo ./lab-init.sh erin --publish 8080:80 --publish 8443:443
+
+# Allocate a block of outbound ports automatically (0 = off, the default)
+LAB_PORT_BLOCK=10 sudo ./lab-init.sh frank
 ```
 
 ## 6. What the user gets
@@ -294,9 +300,46 @@ journalctl -u nginx -n 20
 docker run --rm hello-world # its own dockerd; images and containers live inside
 ```
 
+### Exposing services
+
+Only SSH is published by default; nothing else inside the container is reachable from
+outside. There are two ways to change that, both decided when the container is created:
+
+```bash
+# Explicit mapping: host 8080 -> container 80
+sudo ./lab-init.sh bob --publish 8080:80
+
+# Automatic block: each user gets 10 ports, same number inside and outside
+LAB_PORT_BLOCK=10 sudo ./lab-init.sh carol     # e.g. 30000-30009
+```
+
+- `--publish` is repeatable or comma-separated (`--publish 8080:80,8443:443`). `reset`
+  replays it; `lab-reset.sh bob --publish 8081:80` replaces the whole set.
+- With `LAB_PORT_BLOCK` enabled, `lab-init.sh` scans upward from `LAB_PORT_BLOCK_BASE`
+  (default 30000) for a free range and records it in the state file, so `reset` keeps the
+  same block. A service on `30005` inside is `host:30005` outside.
+- `lab-ls.sh` shows all of these in the `PORTS` column.
+- They bind to `LAB_BIND`. With the default `0.0.0.0` this publishes whatever users run,
+  and `lab-init.sh` warns; prefer an internal IP, or only publish the few ports you need.
+- Services must listen on `0.0.0.0`; something bound to `127.0.0.1` inside is unreachable.
+- A user's `docker run -p 8080:80` inside the container publishes only inside that
+  container's network namespace — it never reaches the host.
+
+### What about containers that are already running?
+
+Docker cannot add port mappings to a running container, so:
+
+- Without a `reset` nothing changes — and **no new ports appear either**.
+- To add ports: `lab-reset.sh <user> --publish 8080:80`, which wipes that user's home,
+  packages and inner Docker data. Back up first if it matters:
+  `docker cp lab-<user>:/home/lab ./backup`, and `docker save` for inner images.
+- To avoid a rebuild: use an SSH tunnel
+  (`ssh -L 8080:localhost:80 -p <ssh-port> lab@host`), or run a sidecar that forwards TCP
+  (`socat` or `nginx stream`) without touching the lab container.
+
 After `lab-reset.sh` recreates a container, nothing inside survives (home directory,
-packages, inner Docker images and containers). The auth mode and host port are kept
-(password mode issues a new initial password).
+packages, inner Docker images and containers). The auth mode, SSH port, published ports and
+port block are kept (password mode issues a new initial password).
 
 ## 7. Verification checklist
 
@@ -317,7 +360,7 @@ sharing one machine" (the same systemd, the same dockerd, one host port), use
 `lab-team.sh`:
 
 ```bash
-sudo ./lab-team.sh init --name dev                     # container lab-dev
+sudo ./lab-team.sh init --name dev --publish 19080:80 # container lab-dev (ports belong to the team)
 sudo ./lab-team.sh add alice --name dev                # create the account, print the initial password
 sudo ./lab-team.sh add bob --name dev --key /home/bob/.ssh/id_ed25519.pub
 sudo ./lab-team.sh add carol --name dev --keygen       # key mode: generate a key pair
@@ -370,6 +413,9 @@ avoid the "user is currently used by process" failure.
   small teams that trust each other; use one container per user when you need isolation.
 - `LAB_BIND` defaults to `0.0.0.0`, so SSH is exposed directly. Restrict the source with a
   firewall, or bind to an internal IP / `127.0.0.1` behind a jump host.
+- `--publish` and `LAB_PORT_BLOCK` expose user services on `LAB_BIND`. Users can run
+  anything inside, so you are publishing that too: open only the ports you actually need
+  and restrict the source with a firewall.
 - `lab-reset.sh` deletes and recreates; it is not a reboot. Plan volumes or backups if data
   must survive.
 - The image pins a digest; upgrading the image means a new environment, so change the
@@ -383,7 +429,9 @@ avoid the "user is currently used by process" failure.
 | Container exits immediately | The start command was overridden; keep the image's default `/sbin/init` |
 | Cannot connect over SSH | `docker logs lab-alice`, `docker exec lab-alice systemctl status ssh`, `authorized_keys` permissions |
 | `Failed to setup docker volume manager` | `/var/lib/sysbox` and `/var/lib/docker` must be on ext4 or btrfs |
-| Port conflict | Pass `--port`, or raise `LAB_PORT_BASE` |
+| Port conflict | Pass `--port`, or raise `LAB_PORT_BASE`; `--publish` conflicts are rejected up front |
+| Published port is unreachable | The service must listen on `0.0.0.0`; check `docker ps` shows the mapping, plus `LAB_BIND` and the firewall |
+| A running container has no new ports | Docker cannot add mappings to a running container; rebuild with `lab-reset.sh ... --publish`, or use an SSH tunnel |
 | No permission for the inner `docker` | Check that `id lab` inside the container includes the `docker` group |
 
 ## 11. License

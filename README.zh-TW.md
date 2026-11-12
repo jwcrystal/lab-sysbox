@@ -232,6 +232,12 @@ sudo ./lab-remove.sh bob --purge-key              # 金鑰模式：連金鑰一�
 sudo ./lab-init.sh bob --port 2210 --cpus 4 --memory 8g
 sudo ./lab-init.sh carol --key /home/carol/.ssh/id_ed25519.pub
 sudo ./lab-init.sh dave --keygen       # 金鑰模式：產生金鑰對
+
+# 額外發佈服務埠（可重複）
+sudo ./lab-init.sh erin --publish 8080:80 --publish 8443:443
+
+# 自動配一段對外埠（0 = 關閉，預設）
+LAB_PORT_BLOCK=10 sudo ./lab-init.sh frank
 ```
 
 ## 6. 使用者會拿到什麼
@@ -259,8 +265,40 @@ journalctl -u nginx -n 20
 docker run --rm hello-world # 他自己的 dockerd，映像與容器都在他的容器內
 ```
 
+### 把服務對外開放
+
+預設只發佈 SSH，容器內其他服務外面連不到。要對外有兩種方式，都在建立容器時決定：
+
+```bash
+# 明確映射：主機 8080 -> 容器 80
+sudo ./lab-init.sh bob --publish 8080:80
+
+# 自動配一段：每位使用者拿到 10 個埠，內外同號
+LAB_PORT_BLOCK=10 sudo ./lab-init.sh carol     # 例如 30000-30009
+```
+
+- `--publish` 可重複或逗號分隔（`--publish 8080:80,8443:443`）；`reset` 會沿用，也可以
+  `lab-reset.sh bob --publish 8081:80` 換掉整組。
+- 開啟 `LAB_PORT_BLOCK` 時，`lab-init.sh` 會從 `LAB_PORT_BLOCK_BASE`（預設 30000）往上找
+  沒被佔用的區段；區段記在狀態檔，`reset` 沿用。使用者把服務跑在 `30005`，外面就是 `host:30005`。
+- `lab-ls.sh` 的 `PORTS` 欄會顯示這些埠。
+- 綁定介面仍是 `LAB_BIND`。預設 `0.0.0.0` 等於把使用者的服務公開到網路上，`lab-init.sh` 會警告；
+  建議改成內網 IP，或只開 `--publish` 的少數埠。
+- 容器內的服務必須聽 `0.0.0.0`；只聽 `127.0.0.1` 的服務外面連不到。
+- 使用者在容器內跑 `docker run -p 8080:80`，那個 `-p` 只發佈到他自己的容器網路，**不會到主機**。
+
+### 已經在跑的容器怎麼辦
+
+Docker 不支援對執行中的容器新增 port mapping，只能重建。所以：
+
+- 沒有 `reset` 就完全沒影響，但**也不會多出新埠**。
+- 要加埠：`lab-reset.sh <使用者> --publish 8080:80`（會清空該使用者的 home、套件與內層 Docker）。
+  要保留資料就先自己備份：`docker cp lab-<使用者>:/home/lab ./backup`、內層映像用 `docker save`。
+- 不想重建：用 SSH 通道 `ssh -L 8080:localhost:80 -p <SSH埠> lab@host`，或另外跑一個 sidecar
+  做 TCP 轉發（`socat`／`nginx stream`），不動 lab 容器本身。
+
 `lab-reset.sh` 重建後，容器內所有東西（home、套件、內層 Docker 映像與容器）都不會留下；
-認證方式與主機埠會沿用（密碼模式會產生新的初始密碼）。
+認證方式、SSH 埠、發佈的埠與區段會沿用（密碼模式會產生新的初始密碼）。
 
 ## 7. 驗證清單
 
@@ -280,7 +318,7 @@ ssh -i /var/lib/lab/keys/alice -p 2200 -o BatchMode=yes lab@127.0.0.1 id   # 金
 同一個主機埠），改用 `lab-team.sh`：
 
 ```bash
-sudo ./lab-team.sh init --name dev                     # 容器 lab-dev
+sudo ./lab-team.sh init --name dev --publish 19080:80 # 容器 lab-dev（發佈埠屬整組）
 sudo ./lab-team.sh add alice --name dev                # 建立帳號並印出初始密碼
 sudo ./lab-team.sh add bob --name dev --key /home/bob/.ssh/id_ed25519.pub
 sudo ./lab-team.sh add carol --name dev --keygen      # 金鑰模式：產生金鑰對
@@ -320,6 +358,8 @@ sudo ./lab-team.sh destroy --name dev
 - 團隊共用容器（`lab-team.sh`）沒有成員間隔離：大家共用同一個 systemd／dockerd，每個人都能 sudo 與操作 docker。
   只適合互相信任的小團隊；要隔離就用每人一容器。
 - `LAB_BIND` 預設 `0.0.0.0`，SSH 直接對外。請用防火牆限制來源，或改成內網 IP／`127.0.0.1` 加跳板。
+- `--publish` 與 `LAB_PORT_BLOCK` 會把使用者的服務公開到 `LAB_BIND` 指定位址。使用者能在裡面跑任何東西，
+  等於把那些東西一起公開；只開真正需要的埠，並用防火牆限制來源。
 - `lab-reset.sh` 是刪除後重建，不是重開機；要留存資料得另外規劃 volume 或備份。
 - 映像固定 digest，升級映像等於換環境，要明確改 digest 並重測。
 
@@ -331,7 +371,9 @@ sudo ./lab-team.sh destroy --name dev
 | 容器一啟動就結束 | 啟動命令被覆寫掉了；要保持映像預設的 `/sbin/init` |
 | SSH 連不上 | `docker logs lab-alice`、`docker exec lab-alice systemctl status ssh`、檢查 `authorized_keys` 權限 |
 | `Failed to setup docker volume manager` | `/var/lib/sysbox`、`/var/lib/docker` 需要 ext4 或 btrfs |
-| 埠衝突 | 用 `--port` 指定，或調高 `LAB_PORT_BASE` |
+| 埠衝突 | 用 `--port` 指定，或調高 `LAB_PORT_BASE`；`--publish` 撞埠時 `lab-init` 會直接拒絕 |
+| 發佈的埠連不到 | 容器內服務要聽 `0.0.0.0`；確認 `docker ps` 有映射、`LAB_BIND` 與防火牆放行 |
+| 既有容器沒有新埠 | Docker 不能對執行中容器加映射；用 `lab-reset.sh ... --publish` 重建，或走 SSH 通道 |
 | 內層 `docker` 沒權限 | 確認容器內 `id lab` 有 `docker` 群組 |
 
 ## 11. 授權
