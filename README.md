@@ -38,6 +38,7 @@ host kernel is shared, so the isolation boundary is weaker than a VM (see the en
 | `lab-ls.sh` | List users, ports and status |
 | `lab-team.sh` | One container shared by a team: `init` / `add` / `remove` / `ls` / `reset` / `destroy` |
 | `lab-remove.sh` | Permanently remove a user (optionally deleting the key too) |
+| `lab-publish.sh` | Add outside ports to a running container via a forwarder (nothing rebuilt) |
 | `lib/lab-common.sh` | Shared settings and helpers |
 | `lab.conf.example` | Copy to `lab.conf` and adjust |
 | `README.zh-TW.md` | Traditional Chinese version of this document |
@@ -125,7 +126,7 @@ machine that does:
 sha256 of `lab-base-amd64.tar.gz`:
 
 ```text
-2e04c0a73b608cf899ffe8b74388cf72a325c16fc2de1fcc05714c50a93ce1b5
+983375cc51911321a4d1773954242eb522879f8f26934ac2afc5198002f7d2be
 ```
 
 Moving everything (scripts, deb, dependencies) as one file: the offline bundle is
@@ -325,17 +326,39 @@ LAB_PORT_BLOCK=10 sudo ./lab-init.sh carol     # e.g. 30000-30009
 - A user's `docker run -p 8080:80` inside the container publishes only inside that
   container's network namespace — it never reaches the host.
 
+### Adding a port without rebuilding (data kept)
+
+A `docker commit` snapshot does not work here: the container runs its own Docker, so
+committing it puts `/var/lib/docker` into an image layer, and dockerd then fails at startup
+with `invalid cross-device link` when it renames directories inside it (verified).
+
+Leave the container alone and forward the port from a small sidecar instead:
+
+```bash
+sudo ./lab-publish.sh alice --add 8080:80      # no rebuild, data untouched
+sudo ./lab-publish.sh alice --ls
+sudo ./lab-publish.sh alice --remove 8080
+```
+
+What it does: creates the `labnet` network, connects the existing container to it (live, no
+restart), and runs `lab-alice-fwd-8080` — a `socat` forwarder from the `lab-base` image
+(socat is installed there) that publishes the host port and forwards to `lab-alice:80`.
+The target is addressed by name on `labnet`, so the forwarder keeps working when the lab
+container restarts and its IP changes. Removing the forwarder closes the port; the lab
+container is never touched.
+
 ### What about containers that are already running?
 
 Docker cannot add port mappings to a running container, so:
 
 - Without a `reset` nothing changes — and **no new ports appear either**.
-- To add ports: `lab-reset.sh <user> --publish 8080:80`, which wipes that user's home,
+- To keep the data (recommended): `lab-publish.sh <user> --add 8080:80`, see above; the
+  container is never rebuilt or touched.
+- To rebuild: `lab-reset.sh <user> --publish 8080:80`, which wipes that user's home,
   packages and inner Docker data. Back up first if it matters:
   `docker cp lab-<user>:/home/lab ./backup`, and `docker save` for inner images.
-- To avoid a rebuild: use an SSH tunnel
-  (`ssh -L 8080:localhost:80 -p <ssh-port> lab@host`), or run a sidecar that forwards TCP
-  (`socat` or `nginx stream`) without touching the lab container.
+- For your own eyes only: an SSH tunnel
+  (`ssh -L 8080:localhost:80 -p <ssh-port> lab@host`).
 
 After `lab-reset.sh` recreates a container, nothing inside survives (home directory,
 packages, inner Docker images and containers). The auth mode, SSH port, published ports and

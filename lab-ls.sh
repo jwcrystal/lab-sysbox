@@ -23,6 +23,7 @@ for f in "${files[@]}"; do
   auth=""
   block=""
   pubs=""
+  fwds=""
   # 只讀需要的欄位，不把狀態檔當程式碼執行。
   while IFS= read -r line; do
     case "${line}" in
@@ -31,6 +32,7 @@ for f in "${files[@]}"; do
       AUTH=*) auth="${line#AUTH=}" ;;
       PORT_BLOCK=*) block="${line#PORT_BLOCK=}" ;;
       PUBLISH=*) pubs="${line#PUBLISH=}" ;;
+      FORWARD=*) fwds="${line#FORWARD=}" ;;
     esac
   done <"$f"
 
@@ -44,6 +46,9 @@ for f in "${files[@]}"; do
   [[ -n "${pubs}" ]] && ports="${pubs}"
   if [[ -n "${block}" ]]; then
     ports="${ports:+${ports},}${block}"
+  fi
+  if [[ -n "${fwds}" ]]; then
+    ports="${ports:+${ports},}fwd:${fwds}"
   fi
   [[ -z "${ports}" ]] && ports="-"
 

@@ -36,6 +36,7 @@ Linux 主機（共用 kernel）
 | `lab-ls.sh` | 列出所有使用者、埠、狀態 |
 | `lab-team.sh` | 團隊共用一個容器：`init`／`add`／`remove`／`ls`／`reset`／`destroy` |
 | `lab-remove.sh` | 永久移除使用者（可一併刪金鑰） |
+| `lab-publish.sh` | 不改容器、用轉發容器替既有容器加對外埠（資料全留） |
 | `lib/lab-common.sh` | 共用設定與函式 |
 | `lab.conf.example` | 複製成 `lab.conf` 後調整 |
 | `README.md` | 英文版（主要語言） |
@@ -114,7 +115,7 @@ docker info --format '{{json .Runtimes}}' | jq
 `lab-base-amd64.tar.gz` 的 sha256：
 
 ```text
-2e04c0a73b608cf899ffe8b74388cf72a325c16fc2de1fcc05714c50a93ce1b5
+983375cc51911321a4d1773954242eb522879f8f26934ac2afc5198002f7d2be
 ```
 
 搬過去（含腳本、deb、依賴包）：離線發布包已打包成單一檔 `lab-sysbox-bundle.tar`（約 300 MB）。
@@ -287,15 +288,33 @@ LAB_PORT_BLOCK=10 sudo ./lab-init.sh carol     # 例如 30000-30009
 - 容器內的服務必須聽 `0.0.0.0`；只聽 `127.0.0.1` 的服務外面連不到。
 - 使用者在容器內跑 `docker run -p 8080:80`，那個 `-p` 只發佈到他自己的容器網路，**不會到主機**。
 
+### 不重建、資料全留地加埠
+
+`docker commit` 快照在這裡行不通：容器內有自己的 Docker，把 `/var/lib/docker` commit 進映像層後，
+dockerd 啟動時會因為 overlayfs 無法重新命名下層目錄而失敗（實測錯誤：`invalid cross-device link`）。
+
+正確做法是**不要動原容器**，另外開一個轉發容器：
+
+```bash
+sudo ./lab-publish.sh alice --add 8080:80      # 不重建，資料原封不動
+sudo ./lab-publish.sh alice --ls
+sudo ./lab-publish.sh alice --remove 8080
+```
+
+它做的事：建立 `labnet` 網路 → 把既有容器接上去（線上操作，不重啟）→ 跑一個
+`lab-alice-fwd-8080` 容器（`socat`，`lab-base` 映像已內建）把主機 8080 轉到
+`lab-alice:80`。目標用**名稱**定址，所以 lab 容器重啟、IP 變了也照樣通；移除轉發容器就關閉該埠，
+lab 容器本身從頭到尾沒被碰過。
+
 ### 已經在跑的容器怎麼辦
 
 Docker 不支援對執行中的容器新增 port mapping，只能重建。所以：
 
 - 沒有 `reset` 就完全沒影響，但**也不會多出新埠**。
-- 要加埠：`lab-reset.sh <使用者> --publish 8080:80`（會清空該使用者的 home、套件與內層 Docker）。
-  要保留資料就先自己備份：`docker cp lab-<使用者>:/home/lab ./backup`、內層映像用 `docker save`。
-- 不想重建：用 SSH 通道 `ssh -L 8080:localhost:80 -p <SSH埠> lab@host`，或另外跑一個 sidecar
-  做 TCP 轉發（`socat`／`nginx stream`），不動 lab 容器本身。
+- **保留資料（推薦）**：`lab-publish.sh <使用者> --add 8080:80`，見上一節；不重建、不動容器。
+- 重建：`lab-reset.sh <使用者> --publish 8080:80`（會清空 home、套件與內層 Docker）。
+  要保留檔案就先備份：`docker cp lab-<使用者>:/home/lab ./backup`、內層映像用 `docker save`。
+- 只要自己看：SSH 通道 `ssh -L 8080:localhost:80 -p <SSH埠> lab@host`。
 
 `lab-reset.sh` 重建後，容器內所有東西（home、套件、內層 Docker 映像與容器）都不會留下；
 認證方式、SSH 埠、發佈的埠與區段會沿用（密碼模式會產生新的初始密碼）。

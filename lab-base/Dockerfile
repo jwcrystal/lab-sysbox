@@ -17,7 +17,7 @@ ENV LANG=en_US.UTF-8
 # 映像已含 systemd、openssh-server、docker CE、sudo；只補上日常練習會用到的工具。
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      vim less tmux htop git curl wget unzip jq rsync \
+      vim less tmux htop git curl wget unzip jq rsync socat \
       ca-certificates net-tools iputils-ping dnsutils procps \
  && sed -i -e 's/^# *en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' \
            -e 's/^# *zh_TW.UTF-8 UTF-8/zh_TW.UTF-8 UTF-8/' /etc/locale.gen \
